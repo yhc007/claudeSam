@@ -5,7 +5,7 @@ mod kairos;
 mod tools;
 
 use clap::{Parser, Subcommand};
-use kairos::{ConfigFile, KairosConfig, KairosDaemon, Notifier, start_server};
+use kairos::{ConfigFile, KairosConfig, KairosDaemon, MemoryBrain, Notifier, start_server};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -28,6 +28,9 @@ enum Commands {
     Tools,
     #[command(subcommand)]
     Kairos(KairosCommands),
+    /// Memory brain commands
+    #[command(subcommand)]
+    Brain(BrainCommands),
 }
 
 #[derive(Subcommand)]
@@ -44,15 +47,36 @@ enum KairosCommands {
         #[arg(short, long)]
         port: Option<u16>,
     },
-    /// Show or initialize config
     Config {
-        /// Initialize default config file
         #[arg(long)]
         init: bool,
-        /// Show config file path
         #[arg(long)]
         path: bool,
     },
+}
+
+#[derive(Subcommand)]
+enum BrainCommands {
+    /// Store a memory
+    Store {
+        /// Memory content
+        content: String,
+        /// Tags (comma-separated)
+        #[arg(short, long, default_value = "")]
+        tags: String,
+    },
+    /// Recall memories
+    Recall {
+        /// Search query
+        query: String,
+        /// Number of results
+        #[arg(short, long, default_value = "5")]
+        limit: usize,
+    },
+    /// Show brain stats
+    Stats,
+    /// Run memory consolidation (sleep)
+    Sleep,
 }
 
 #[tokio::main]
@@ -83,8 +107,52 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Kairos(kairos_cmd)) => {
             handle_kairos(kairos_cmd).await?;
         }
+        Some(Commands::Brain(brain_cmd)) => {
+            handle_brain(brain_cmd)?;
+        }
     }
 
+    Ok(())
+}
+
+fn handle_brain(cmd: BrainCommands) -> anyhow::Result<()> {
+    let brain = MemoryBrain::new();
+    
+    match cmd {
+        BrainCommands::Store { content, tags } => {
+            let tags: Vec<&str> = if tags.is_empty() {
+                vec![]
+            } else {
+                tags.split(',').collect()
+            };
+            
+            println!("🧠 Storing memory...");
+            let result = brain.store(&content, &tags)?;
+            println!("{}", result);
+        }
+        BrainCommands::Recall { query, limit } => {
+            println!("🧠 Recalling memories for: {}", query);
+            let memories = brain.recall(&query, limit)?;
+            
+            if memories.is_empty() {
+                println!("No memories found.");
+            } else {
+                for (i, mem) in memories.iter().enumerate() {
+                    println!("{}. {}", i + 1, mem.content);
+                }
+            }
+        }
+        BrainCommands::Stats => {
+            let stats = brain.stats()?;
+            println!("{}", stats);
+        }
+        BrainCommands::Sleep => {
+            println!("😴 Running memory consolidation...");
+            let result = brain.sleep()?;
+            println!("{}", result);
+        }
+    }
+    
     Ok(())
 }
 
@@ -96,7 +164,6 @@ async fn handle_kairos(cmd: KairosCommands) -> anyhow::Result<()> {
             } else if init {
                 ConfigFile::create_default()?;
             } else {
-                // Show current config
                 let config = ConfigFile::load()?;
                 println!("{}", toml::to_string_pretty(&config)?);
             }

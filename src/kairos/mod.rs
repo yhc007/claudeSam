@@ -1,6 +1,7 @@
 //! 🤖 KAIROS - 자율 에이전트 모드
 
 pub mod auto_dream;
+pub mod brain;
 pub mod config_file;
 pub mod consolidation;
 pub mod daily_log;
@@ -11,6 +12,7 @@ pub mod server;
 pub mod webhook;
 
 pub use auto_dream::AutoDream;
+pub use brain::MemoryBrain;
 pub use config_file::ConfigFile;
 pub use consolidation::ConsolidationLock;
 pub use daily_log::DailyLog;
@@ -41,7 +43,6 @@ pub struct TelegramConfig {
 
 impl Default for KairosConfig {
     fn default() -> Self {
-        // 설정 파일에서 로드 시도
         ConfigFile::load()
             .map(|c| c.to_kairos_config())
             .unwrap_or_else(|_| {
