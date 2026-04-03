@@ -10,8 +10,12 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 #[command(name = "sam")]
 #[command(about = "🦊 Sam - Rust AI Agent", long_about = None)]
 struct Cli {
+    /// Task to run (shortcut for 'sam run "task"')
+    #[arg(trailing_var_arg = true)]
+    task: Vec<String>,
+
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -36,16 +40,22 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
 
+    // 인자가 있으면 바로 run
+    if !cli.task.is_empty() {
+        let task = cli.task.join(" ");
+        engine::run_task(&task).await?;
+        return Ok(());
+    }
+
+    // 서브커맨드 처리
     match cli.command {
-        Commands::Chat => {
-            println!("🦊 Sam is ready! Type your message:");
+        Some(Commands::Chat) | None => {
             engine::run_chat().await?;
         }
-        Commands::Run { task } => {
-            println!("🦊 Running task: {}", task);
+        Some(Commands::Run { task }) => {
             engine::run_task(&task).await?;
         }
-        Commands::Tools => {
+        Some(Commands::Tools) => {
             tools::list_tools();
         }
     }
