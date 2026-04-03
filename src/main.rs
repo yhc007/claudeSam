@@ -5,7 +5,10 @@ mod kairos;
 mod tools;
 
 use clap::{Parser, Subcommand};
-use kairos::{ConfigFile, KairosConfig, KairosDaemon, MemoryBrain, Notifier, start_server};
+use kairos::{
+    ConfigFile, DaemonizeConfig, KairosConfig, KairosDaemon, MemoryBrain, 
+    Notifier, daemonize, is_daemon_running, start_server, stop_daemon
+};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -28,64 +31,73 @@ enum Commands {
     Tools,
     #[command(subcommand)]
     Kairos(KairosCommands),
-    /// Memory brain commands
     #[command(subcommand)]
     Brain(BrainCommands),
 }
 
 #[derive(Subcommand)]
 enum KairosCommands {
-    Start,
+    /// Start KAIROS daemon
+    Start {
+        /// Run in background (daemonize)
+        #[arg(short, long)]
+        daemon: bool,
+    },
+    /// Stop KAIROS daemon
     Stop,
+    /// Show KAIROS status
     Status,
+    /// Run memory dream (manual)
     Dream,
+    /// Show daily log
     Log {
         #[arg(short, long, default_value = "1")]
         days: usize,
     },
+    /// Start HTTP server
     Serve {
         #[arg(short, long)]
         port: Option<u16>,
+        /// Run in background
+        #[arg(short, long)]
+        daemon: bool,
     },
+    /// Show or initialize config
     Config {
         #[arg(long)]
         init: bool,
         #[arg(long)]
         path: bool,
     },
+    /// Show logs
+    Logs {
+        /// Follow log output
+        #[arg(short, long)]
+        follow: bool,
+        /// Number of lines
+        #[arg(short, long, default_value = "50")]
+        lines: usize,
+    },
 }
 
 #[derive(Subcommand)]
 enum BrainCommands {
-    /// Store a memory
     Store {
-        /// Memory content
         content: String,
-        /// Tags (comma-separated)
         #[arg(short, long, default_value = "")]
         tags: String,
     },
-    /// Recall memories
     Recall {
-        /// Search query
         query: String,
-        /// Number of results
         #[arg(short, long, default_value = "5")]
         limit: usize,
     },
-    /// Show brain stats
     Stats,
-    /// Run memory consolidation (sleep)
     Sleep,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
-
     let cli = Cli::parse();
 
     if !cli.task.is_empty() {
@@ -96,6 +108,10 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Some(Commands::Chat) | None => {
+            tracing_subscriber::registry()
+                .with(tracing_subscriber::fmt::layer())
+                .with(tracing_subscriber::EnvFilter::from_default_env())
+                .init();
             engine::run_chat().await?;
         }
         Some(Commands::Run { task }) => {
@@ -157,6 +173,9 @@ fn handle_brain(cmd: BrainCommands) -> anyhow::Result<()> {
 }
 
 async fn handle_kairos(cmd: KairosCommands) -> anyhow::Result<()> {
+    let config = KairosConfig::default();
+    let daemon_config = DaemonizeConfig::new(config.memory_path.clone());
+
     match cmd {
         KairosCommands::Config { init, path } => {
             if path {
@@ -164,33 +183,58 @@ async fn handle_kairos(cmd: KairosCommands) -> anyhow::Result<()> {
             } else if init {
                 ConfigFile::create_default()?;
             } else {
-                let config = ConfigFile::load()?;
-                println!("{}", toml::to_string_pretty(&config)?);
+                let cfg = ConfigFile::load()?;
+                println!("{}", toml::to_string_pretty(&cfg)?);
             }
             return Ok(());
         }
-        _ => {}
-    }
-
-    let config = KairosConfig::default();
-    let daemon = KairosDaemon::new(config.clone());
-    
-    match cmd {
-        KairosCommands::Start => {
-            println!("🤖 Starting KAIROS daemon...");
+        KairosCommands::Logs { follow, lines } => {
+            let log_file = config.memory_path.join("kairos.log");
+            if follow {
+                // tail -f
+                let _ = std::process::Command::new("tail")
+                    .args(["-f", "-n", &lines.to_string()])
+                    .arg(&log_file)
+                    .status();
+            } else {
+                let _ = std::process::Command::new("tail")
+                    .args(["-n", &lines.to_string()])
+                    .arg(&log_file)
+                    .status();
+            }
+            return Ok(());
+        }
+        KairosCommands::Start { daemon: daemonize_flag } => {
+            if daemonize_flag {
+                println!("🤖 Starting KAIROS daemon in background...");
+                daemonize(&daemon_config)?;
+                println!("✅ KAIROS daemon started (PID file: {:?})", daemon_config.pid_file);
+            }
+            
+            // 로깅 초기화
+            tracing_subscriber::registry()
+                .with(tracing_subscriber::fmt::layer())
+                .with(tracing_subscriber::EnvFilter::from_default_env())
+                .init();
+            
+            let daemon = KairosDaemon::new(config);
             daemon.start().await?;
         }
         KairosCommands::Stop => {
-            daemon.stop()?;
+            if stop_daemon(&daemon_config.pid_file)? {
+                println!("🛑 KAIROS daemon stopped");
+            } else {
+                println!("💤 KAIROS daemon is not running");
+            }
         }
         KairosCommands::Status => {
-            match daemon.status()? {
-                kairos::DaemonStatus::Running { pid } => {
-                    println!("🤖 KAIROS is running (PID: {})", pid);
-                }
-                kairos::DaemonStatus::Stopped => {
-                    println!("💤 KAIROS is not running");
-                }
+            if is_daemon_running(&daemon_config.pid_file) {
+                let pid = std::fs::read_to_string(&daemon_config.pid_file)
+                    .unwrap_or_default();
+                println!("🤖 KAIROS is running (PID: {})", pid.trim());
+                println!("   Log: {:?}", config.memory_path.join("kairos.log"));
+            } else {
+                println!("💤 KAIROS is not running");
             }
         }
         KairosCommands::Dream => {
@@ -217,11 +261,21 @@ async fn handle_kairos(cmd: KairosCommands) -> anyhow::Result<()> {
                 }
             }
         }
-        KairosCommands::Serve { port } => {
+        KairosCommands::Serve { port, daemon: daemonize_flag } => {
             let mut config = config;
             if let Some(p) = port {
                 config.server_port = p;
             }
+            
+            if daemonize_flag {
+                println!("🌐 Starting KAIROS server in background...");
+                daemonize(&daemon_config)?;
+            }
+            
+            tracing_subscriber::registry()
+                .with(tracing_subscriber::fmt::layer())
+                .with(tracing_subscriber::EnvFilter::from_default_env())
+                .init();
             
             let (event_tx, mut event_rx) = mpsc::channel(100);
             let notifier = Arc::new(Notifier::new());
@@ -240,7 +294,6 @@ async fn handle_kairos(cmd: KairosCommands) -> anyhow::Result<()> {
             
             start_server(config, event_tx, notifier).await?;
         }
-        KairosCommands::Config { .. } => unreachable!(),
     }
     
     Ok(())
