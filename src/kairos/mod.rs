@@ -10,6 +10,7 @@ pub mod daemon;
 pub mod memdir;
 pub mod notify;
 pub mod server;
+pub mod ultraplan;
 pub mod webhook;
 
 pub use auto_dream::AutoDream;
@@ -22,6 +23,7 @@ pub use daemonize::{DaemonizeConfig, daemonize, is_daemon_running, stop_daemon};
 pub use memdir::MemoryDir;
 pub use notify::{Notification, Notifier, Priority};
 pub use server::start_server;
+pub use ultraplan::{Plan, PlanStatus, UltraPlan};
 pub use webhook::{GitHubEvent, WebhookHandler, format_event};
 
 /// KAIROS 설정

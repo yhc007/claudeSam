@@ -7,7 +7,7 @@ mod tools;
 use clap::{Parser, Subcommand};
 use kairos::{
     ConfigFile, DaemonizeConfig, KairosConfig, KairosDaemon, MemoryBrain, 
-    Notifier, daemonize, is_daemon_running, start_server, stop_daemon
+    Notifier, PlanStatus, UltraPlan, daemonize, is_daemon_running, start_server, stop_daemon
 };
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -33,48 +33,50 @@ enum Commands {
     Kairos(KairosCommands),
     #[command(subcommand)]
     Brain(BrainCommands),
+    /// Deep planning mode (ULTRAPLAN)
+    Ultraplan {
+        /// Planning prompt
+        prompt: String,
+        /// Timeout in minutes
+        #[arg(short, long, default_value = "30")]
+        timeout: u64,
+        /// Skip approval prompt
+        #[arg(long)]
+        no_approve: bool,
+    },
+    /// Manage saved plans
+    #[command(subcommand)]
+    Plans(PlansCommands),
 }
 
 #[derive(Subcommand)]
 enum KairosCommands {
-    /// Start KAIROS daemon
     Start {
-        /// Run in background (daemonize)
         #[arg(short, long)]
         daemon: bool,
     },
-    /// Stop KAIROS daemon
     Stop,
-    /// Show KAIROS status
     Status,
-    /// Run memory dream (manual)
     Dream,
-    /// Show daily log
     Log {
         #[arg(short, long, default_value = "1")]
         days: usize,
     },
-    /// Start HTTP server
     Serve {
         #[arg(short, long)]
         port: Option<u16>,
-        /// Run in background
         #[arg(short, long)]
         daemon: bool,
     },
-    /// Show or initialize config
     Config {
         #[arg(long)]
         init: bool,
         #[arg(long)]
         path: bool,
     },
-    /// Show logs
     Logs {
-        /// Follow log output
         #[arg(short, long)]
         follow: bool,
-        /// Number of lines
         #[arg(short, long, default_value = "50")]
         lines: usize,
     },
@@ -94,6 +96,20 @@ enum BrainCommands {
     },
     Stats,
     Sleep,
+}
+
+#[derive(Subcommand)]
+enum PlansCommands {
+    /// List all plans
+    List,
+    /// Show a specific plan
+    Show { id: String },
+    /// Approve a plan
+    Approve { id: String },
+    /// Reject a plan
+    Reject { id: String },
+    /// Apply an approved plan
+    Apply { id: String },
 }
 
 #[tokio::main]
@@ -126,8 +142,110 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Brain(brain_cmd)) => {
             handle_brain(brain_cmd)?;
         }
+        Some(Commands::Ultraplan { prompt, timeout, no_approve }) => {
+            handle_ultraplan(&prompt, timeout, no_approve).await?;
+        }
+        Some(Commands::Plans(plans_cmd)) => {
+            handle_plans(plans_cmd).await?;
+        }
     }
 
+    Ok(())
+}
+
+async fn handle_ultraplan(prompt: &str, timeout: u64, no_approve: bool) -> anyhow::Result<()> {
+    let config = KairosConfig::default();
+    let ultraplan = UltraPlan::new(&config.memory_path);
+    
+    // Plan 생성
+    let plan = ultraplan.run(prompt, timeout).await?;
+    
+    println!("\n📋 Plan saved: {}", plan.id);
+    println!("   Location: ~/.claude-sam/memory/plans/{}.md", plan.id);
+    
+    if no_approve {
+        println!("\n⏭️  Skipping approval (--no-approve)");
+        return Ok(());
+    }
+    
+    // 대화형 승인
+    if ultraplan.interactive_approve(&plan)? {
+        ultraplan.approve_plan(&plan.id)?;
+        println!("\n✅ Plan approved!");
+        
+        print!("\n🚀 Apply now? (y/n): ");
+        std::io::Write::flush(&mut std::io::stdout())?;
+        
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        
+        if input.trim().to_lowercase() == "y" {
+            let result = ultraplan.apply_plan(&plan.id).await?;
+            println!("\n{}", result);
+        }
+    } else {
+        ultraplan.reject_plan(&plan.id)?;
+        println!("\n❌ Plan rejected");
+    }
+    
+    Ok(())
+}
+
+async fn handle_plans(cmd: PlansCommands) -> anyhow::Result<()> {
+    let config = KairosConfig::default();
+    let ultraplan = UltraPlan::new(&config.memory_path);
+    
+    match cmd {
+        PlansCommands::List => {
+            let plans = ultraplan.list_plans()?;
+            
+            if plans.is_empty() {
+                println!("📋 No plans found");
+            } else {
+                println!("📋 Plans:\n");
+                for plan in plans {
+                    let status_emoji = match plan.status {
+                        PlanStatus::Pending => "⏳",
+                        PlanStatus::Approved => "✅",
+                        PlanStatus::Rejected => "❌",
+                        PlanStatus::Applied => "🚀",
+                    };
+                    println!("{} {} - {} ({:?})", 
+                        status_emoji, 
+                        plan.id, 
+                        if plan.prompt.len() > 50 { 
+                            format!("{}...", &plan.prompt[..50]) 
+                        } else { 
+                            plan.prompt.clone() 
+                        },
+                        plan.status
+                    );
+                }
+            }
+        }
+        PlansCommands::Show { id } => {
+            let plan = ultraplan.load_plan(&id)?;
+            println!("📋 Plan: {}\n", plan.id);
+            println!("Status: {:?}", plan.status);
+            println!("Created: {}", plan.created_at);
+            println!("Prompt: {}\n", plan.prompt);
+            println!("{}", "=".repeat(60));
+            println!("{}", plan.content);
+        }
+        PlansCommands::Approve { id } => {
+            ultraplan.approve_plan(&id)?;
+            println!("✅ Plan {} approved", id);
+        }
+        PlansCommands::Reject { id } => {
+            ultraplan.reject_plan(&id)?;
+            println!("❌ Plan {} rejected", id);
+        }
+        PlansCommands::Apply { id } => {
+            let result = ultraplan.apply_plan(&id).await?;
+            println!("🚀 Plan applied:\n{}", result);
+        }
+    }
+    
     Ok(())
 }
 
@@ -191,7 +309,6 @@ async fn handle_kairos(cmd: KairosCommands) -> anyhow::Result<()> {
         KairosCommands::Logs { follow, lines } => {
             let log_file = config.memory_path.join("kairos.log");
             if follow {
-                // tail -f
                 let _ = std::process::Command::new("tail")
                     .args(["-f", "-n", &lines.to_string()])
                     .arg(&log_file)
@@ -208,10 +325,9 @@ async fn handle_kairos(cmd: KairosCommands) -> anyhow::Result<()> {
             if daemonize_flag {
                 println!("🤖 Starting KAIROS daemon in background...");
                 daemonize(&daemon_config)?;
-                println!("✅ KAIROS daemon started (PID file: {:?})", daemon_config.pid_file);
+                println!("✅ KAIROS daemon started");
             }
             
-            // 로깅 초기화
             tracing_subscriber::registry()
                 .with(tracing_subscriber::fmt::layer())
                 .with(tracing_subscriber::EnvFilter::from_default_env())
@@ -229,10 +345,8 @@ async fn handle_kairos(cmd: KairosCommands) -> anyhow::Result<()> {
         }
         KairosCommands::Status => {
             if is_daemon_running(&daemon_config.pid_file) {
-                let pid = std::fs::read_to_string(&daemon_config.pid_file)
-                    .unwrap_or_default();
+                let pid = std::fs::read_to_string(&daemon_config.pid_file).unwrap_or_default();
                 println!("🤖 KAIROS is running (PID: {})", pid.trim());
-                println!("   Log: {:?}", config.memory_path.join("kairos.log"));
             } else {
                 println!("💤 KAIROS is not running");
             }
@@ -268,7 +382,6 @@ async fn handle_kairos(cmd: KairosCommands) -> anyhow::Result<()> {
             }
             
             if daemonize_flag {
-                println!("🌐 Starting KAIROS server in background...");
                 daemonize(&daemon_config)?;
             }
             
