@@ -1,6 +1,6 @@
 [package]
 name = "claude-sam"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "🦊 Sam - Rust AI Agent with KAIROS"
 authors = ["Paul Yu <yhc007@gmail.com>"]
@@ -20,6 +20,12 @@ async-trait = "0.1"
 chrono = "0.4"
 dirs = "5"
 filetime = "0.2"
+# HTTP Server
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
 
 [dev-dependencies]
 tokio-test = "0.4"

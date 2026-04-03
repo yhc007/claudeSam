@@ -5,7 +5,9 @@ mod kairos;
 mod tools;
 
 use clap::{Parser, Subcommand};
-use kairos::{KairosConfig, KairosDaemon};
+use kairos::{KairosConfig, KairosDaemon, Notifier, start_server};
+use std::sync::Arc;
+use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
@@ -38,7 +40,7 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum KairosCommands {
-    /// Start KAIROS daemon
+    /// Start KAIROS daemon (foreground)
     Start,
     /// Stop KAIROS daemon
     Stop,
@@ -51,6 +53,12 @@ enum KairosCommands {
         /// Number of days to show
         #[arg(short, long, default_value = "1")]
         days: usize,
+    },
+    /// Start HTTP server for webhooks
+    Serve {
+        /// Port number
+        #[arg(short, long, default_value = "3847")]
+        port: u16,
     },
 }
 
@@ -103,10 +111,10 @@ async fn handle_kairos(cmd: KairosCommands) -> anyhow::Result<()> {
         }
         KairosCommands::Status => {
             match daemon.status()? {
-                kairos::daemon::DaemonStatus::Running { pid } => {
+                kairos::DaemonStatus::Running { pid } => {
                     println!("🤖 KAIROS is running (PID: {})", pid);
                 }
-                kairos::daemon::DaemonStatus::Stopped => {
+                kairos::DaemonStatus::Stopped => {
                     println!("💤 KAIROS is not running");
                 }
             }
@@ -134,6 +142,29 @@ async fn handle_kairos(cmd: KairosCommands) -> anyhow::Result<()> {
                     }
                 }
             }
+        }
+        KairosCommands::Serve { port } => {
+            let mut config = config;
+            config.server_port = port;
+            
+            let (event_tx, mut event_rx) = mpsc::channel(100);
+            let notifier = Arc::new(Notifier::new());
+            
+            // 이벤트 처리 태스크
+            let notifier_clone = notifier.clone();
+            tokio::spawn(async move {
+                while let Some(event) = event_rx.recv().await {
+                    let message = kairos::format_event(&event);
+                    println!("📥 {}", message);
+                    let _ = notifier_clone.send(&kairos::Notification::new(
+                        "GitHub Event",
+                        &message
+                    )).await;
+                }
+            });
+            
+            // HTTP 서버 시작
+            start_server(config, event_tx, notifier).await?;
         }
     }
     
