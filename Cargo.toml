@@ -1,8 +1,8 @@
 [package]
 name = "claude-sam"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
-description = "🦊 Sam - Rust AI Agent (Claude Code style)"
+description = "🦊 Sam - Rust AI Agent with KAIROS"
 authors = ["Paul Yu <yhc007@gmail.com>"]
 repository = "https://github.com/yhc007/claudeSam"
 license = "MIT"
@@ -17,6 +17,9 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1"
+chrono = "0.4"
+dirs = "5"
+filetime = "0.2"
 
 [dev-dependencies]
 tokio-test = "0.4"

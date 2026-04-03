@@ -1,14 +1,16 @@
 mod api;
 mod config;
 mod engine;
+mod kairos;
 mod tools;
 
 use clap::{Parser, Subcommand};
+use kairos::{KairosConfig, KairosDaemon};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[derive(Parser)]
 #[command(name = "sam")]
-#[command(about = "🦊 Sam - Rust AI Agent", long_about = None)]
+#[command(about = "🦊 Sam - Rust AI Agent with KAIROS", long_about = None)]
 struct Cli {
     /// Task to run (shortcut for 'sam run "task"')
     #[arg(trailing_var_arg = true)]
@@ -29,6 +31,27 @@ enum Commands {
     },
     /// List available tools
     Tools,
+    /// KAIROS autonomous agent mode
+    #[command(subcommand)]
+    Kairos(KairosCommands),
+}
+
+#[derive(Subcommand)]
+enum KairosCommands {
+    /// Start KAIROS daemon
+    Start,
+    /// Stop KAIROS daemon
+    Stop,
+    /// Show KAIROS status
+    Status,
+    /// Run memory dream (manual)
+    Dream,
+    /// Show daily log
+    Log {
+        /// Number of days to show
+        #[arg(short, long, default_value = "1")]
+        days: usize,
+    },
 }
 
 #[tokio::main]
@@ -58,7 +81,61 @@ async fn main() -> anyhow::Result<()> {
         Some(Commands::Tools) => {
             tools::list_tools();
         }
+        Some(Commands::Kairos(kairos_cmd)) => {
+            handle_kairos(kairos_cmd).await?;
+        }
     }
 
+    Ok(())
+}
+
+async fn handle_kairos(cmd: KairosCommands) -> anyhow::Result<()> {
+    let config = KairosConfig::default();
+    let daemon = KairosDaemon::new(config.clone());
+    
+    match cmd {
+        KairosCommands::Start => {
+            println!("🤖 Starting KAIROS daemon...");
+            daemon.start().await?;
+        }
+        KairosCommands::Stop => {
+            daemon.stop()?;
+        }
+        KairosCommands::Status => {
+            match daemon.status()? {
+                kairos::daemon::DaemonStatus::Running { pid } => {
+                    println!("🤖 KAIROS is running (PID: {})", pid);
+                }
+                kairos::daemon::DaemonStatus::Stopped => {
+                    println!("💤 KAIROS is not running");
+                }
+            }
+        }
+        KairosCommands::Dream => {
+            println!("🌙 Running manual dream...");
+            let auto_dream = kairos::AutoDream::new(config);
+            match auto_dream.run_dream().await {
+                Ok(result) => println!("Dream result: {:?}", result),
+                Err(e) => eprintln!("Dream error: {}", e),
+            }
+        }
+        KairosCommands::Log { days } => {
+            let memdir = kairos::MemoryDir::new(&config.memory_path);
+            let daily_log = kairos::DailyLog::new(memdir.logs_path());
+            
+            let logs = daily_log.list_recent(days)?;
+            if logs.is_empty() {
+                println!("📝 No logs found");
+            } else {
+                for log in logs {
+                    if let Ok(content) = std::fs::read_to_string(&log) {
+                        println!("{}", content);
+                        println!("---");
+                    }
+                }
+            }
+        }
+    }
+    
     Ok(())
 }

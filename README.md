@@ -1,13 +1,14 @@
 # 🦊 claudeSam
 
-Rust AI Agent - Claude Code CLI 백엔드
+Rust AI Agent with KAIROS - Claude Code 스타일 + 자율 에이전트
 
 ## ✨ 특징
 
 - 🦀 **순수 Rust** - 빠르고 안전한 네이티브 바이너리
 - 💳 **API 키 불필요** - Claude Max 플랜으로 바로 사용!
-- ⚡ **초고속** - Python 대비 16x 빠른 시작
-- 🔧 **도구 시스템** - Bash, File, Grep 기본 제공
+- 🤖 **KAIROS** - 백그라운드 자율 에이전트 모드
+- 🌙 **Auto Dream** - 자동 메모리 정리
+- ⚡ **16x 빠름** - Python 대비 시작 시간
 
 ## 📊 vs Python 에이전트
 
@@ -16,61 +17,50 @@ Rust AI Agent - Claude Code CLI 백엔드
 | 시작 시간 | 80-120ms | **~5ms** | **16x 빠름** |
 | 메모리 | ~18MB | **~7MB** | **2.6x 절약** |
 | 바이너리 | 런타임 필요 | **4.9MB** | 단일 파일 |
-| API 키 | 필요 | **불필요** | Max 플랜 활용 |
 
 ## 설치
 
 ```bash
-# 사전 요구사항: Claude Code CLI (Max 플랜)
-claude --version
-
-# 설치
 git clone https://github.com/yhc007/claudeSam.git
 cd claudeSam
 cargo build --release
-
-# PATH에 추가 (선택)
 cp target/release/sam ~/.local/bin/
 ```
 
 ## 사용법
 
+### 기본 명령어
 ```bash
-# 단발 실행 (추천)
-sam run "현재 디렉토리의 파일 목록 보여줘"
-sam run "이 Rust 코드의 버그 찾아줘: ..."
-
-# 대화형 모드
-sam chat
-
-# 도구 목록
-sam tools
+sam "질문"              # 바로 실행
+sam chat                # 대화형 모드
+sam tools               # 도구 목록
 ```
 
-## 아키텍처
+### 🤖 KAIROS 모드
+```bash
+sam kairos start        # 백그라운드 데몬 시작
+sam kairos stop         # 데몬 중지
+sam kairos status       # 상태 확인
+sam kairos dream        # 수동 메모리 정리
+sam kairos log          # 일별 로그 확인
+sam kairos log -d 7     # 최근 7일 로그
+```
+
+## 🤖 KAIROS 아키텍처
 
 ```
 ┌─────────────────────────────────────────────┐
-│                 claudeSam                    │
+│                 KAIROS Daemon                │
 ├─────────────────────────────────────────────┤
-│  CLI (clap)                                  │
-│    ├── sam chat     (대화형)                 │
-│    ├── sam run      (단발 실행)              │
-│    └── sam tools    (도구 목록)              │
+│  Auto Dream (자동 메모리 정리)               │
+│    ├── Time Gate: 24시간 경과                │
+│    ├── Session Gate: 5+ 세션                 │
+│    └── Lock Gate: 분산 락                    │
 ├─────────────────────────────────────────────┤
-│  Engine (agent loop)                         │
-│    └── ClaudeClient (Claude Code CLI 백엔드) │
-├─────────────────────────────────────────────┤
-│  Tools                                       │
-│    ├── bash   (명령 실행, 보안 체크)         │
-│    ├── file   (읽기/쓰기)                    │
-│    └── grep   (ripgrep 검색)                 │
-└─────────────────────────────────────────────┘
-          │
-          ▼
-┌─────────────────────────────────────────────┐
-│  Claude Code CLI (Max 플랜)                  │
-│  claude --print --dangerously-skip-perms    │
+│  Memory System                               │
+│    ├── MEMORY.md (인덱스, 200줄 제한)        │
+│    ├── daily_log/ (일별 로그)                │
+│    └── consolidation lock (PID 기반)         │
 └─────────────────────────────────────────────┘
 ```
 
@@ -79,34 +69,33 @@ sam tools
 ```
 claudeSam/
 ├── src/
-│   ├── main.rs         # CLI 진입점
-│   ├── api/            # Claude Code CLI 클라이언트
-│   ├── engine/         # Agent 루프
-│   ├── tools/          # bash, file, grep
-│   ├── config/         # 설정
-│   ├── memory/         # (예정) 세션 기억
-│   └── tui/            # (예정) 터미널 UI
+│   ├── main.rs           # CLI + KAIROS 명령어
+│   ├── api/              # Claude Code CLI 클라이언트
+│   ├── engine/           # Agent 루프
+│   ├── tools/            # bash, file, grep
+│   ├── config/           # 설정
+│   └── kairos/           # 🤖 KAIROS 모듈
+│       ├── mod.rs        # 메인
+│       ├── daemon.rs     # 백그라운드 데몬
+│       ├── auto_dream.rs # 자동 메모리 정리
+│       ├── consolidation.rs # 분산 락
+│       ├── memdir.rs     # 메모리 디렉토리
+│       └── daily_log.rs  # 일별 로그
 └── Cargo.toml
 ```
 
 ## 🗺️ 로드맵
 
-- [x] 기본 CLI (chat, run, tools)
-- [x] Claude Code CLI 백엔드 (API 키 불필요!)
-- [x] Tool 시스템 (bash, file, grep)
-- [ ] memory-brain 연동 (시맨틱 메모리)
-- [ ] pekko-actor 연동 (Actor 병렬 처리)
-- [ ] TUI 구현 (ratatui)
-- [ ] 스트리밍 응답
-
-## Sam(🦊)의 Sub-Agent로 활용
-
-Clawdbot의 Sam이 복잡한 코딩 작업을 claudeSam에게 위임:
-
-```bash
-# Sam이 내부적으로 호출
-sam run "pekko-actor에 새 메시지 타입 추가해줘"
-```
+- [x] 기본 CLI
+- [x] Claude Code CLI 백엔드
+- [x] Tool 시스템
+- [x] **KAIROS 데몬**
+- [x] **Auto Dream (자동 메모리 정리)**
+- [x] **일별 로그 시스템**
+- [ ] GitHub Webhook 연동
+- [ ] 푸시 알림
+- [ ] memory-brain 연동
+- [ ] pekko-actor 연동
 
 ## 라이선스
 
@@ -114,4 +103,4 @@ MIT
 
 ---
 
-*🦊 Sam이 만들었어요!*
+*🦊 Sam + 🤖 KAIROS*
