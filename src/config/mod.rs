@@ -1,14 +1,14 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 pub struct Config {
-    pub api_key: String,
+    pub cli_path: String,
 }
 
 impl Config {
     pub fn load() -> Result<Self> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .context("ANTHROPIC_API_KEY environment variable not set")?;
+        let cli_path = std::env::var("CLAUDE_CLI_PATH")
+            .unwrap_or_else(|_| "claude".to_string());
         
-        Ok(Self { api_key })
+        Ok(Self { cli_path })
     }
 }

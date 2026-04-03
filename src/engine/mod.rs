@@ -1,15 +1,13 @@
-use crate::api::{AnthropicClient, ContentBlock, Message, MessageContent, Tool as ApiTool};
-use crate::config::Config;
-use crate::tools::{get_all_tools, Tool};
+use crate::api::{ClaudeClient, ContentBlock, Message, MessageContent};
 use anyhow::Result;
-use serde_json::json;
 use std::io::{self, Write};
 
 pub async fn run_chat() -> Result<()> {
-    let config = Config::load()?;
-    let client = AnthropicClient::new(config.api_key);
-    let tools = get_all_tools();
+    let client = ClaudeClient::new();
     let mut messages: Vec<Message> = Vec::new();
+
+    println!("🦊 claudeSam ready! (Powered by Claude Code CLI)");
+    println!("   Type 'exit' to quit.\n");
 
     loop {
         print!("> ");
@@ -29,101 +27,51 @@ pub async fn run_chat() -> Result<()> {
             content: MessageContent::Text(input.to_string()),
         });
 
-        let response = process_with_tools(&client, &tools, &mut messages).await?;
-        println!("\n🦊 {}\n", response);
+        print!("🦊 Thinking...");
+        io::stdout().flush()?;
+
+        let response = client.send_message(messages.clone(), None).await?;
+        
+        // 줄 지우기
+        print!("\r                \r");
+
+        let response_text = response
+            .content
+            .iter()
+            .filter_map(|b| b.text.as_ref())
+            .cloned().collect::<Vec<_>>()
+            .join("\n");
+
+        println!("🦊 {}\n", response_text);
+
+        messages.push(Message {
+            role: "assistant".to_string(),
+            content: MessageContent::Text(response_text),
+        });
     }
 
     Ok(())
 }
 
 pub async fn run_task(task: &str) -> Result<()> {
-    let config = Config::load()?;
-    let client = AnthropicClient::new(config.api_key);
-    let tools = get_all_tools();
-    let mut messages = vec![Message {
+    let client = ClaudeClient::new();
+    let messages = vec![Message {
         role: "user".to_string(),
         content: MessageContent::Text(task.to_string()),
     }];
 
-    let response = process_with_tools(&client, &tools, &mut messages).await?;
-    println!("\n🦊 {}", response);
+    println!("🦊 Running task with Claude Code CLI...\n");
+
+    let response = client.send_message(messages, None).await?;
+    
+    let response_text = response
+        .content
+        .iter()
+        .filter_map(|b| b.text.as_ref())
+        .cloned().collect::<Vec<_>>()
+        .join("\n");
+
+    println!("{}", response_text);
 
     Ok(())
-}
-
-async fn process_with_tools(
-    client: &AnthropicClient,
-    tools: &[Box<dyn Tool>],
-    messages: &mut Vec<Message>,
-) -> Result<String> {
-    let api_tools: Vec<ApiTool> = tools
-        .iter()
-        .map(|t| ApiTool {
-            name: t.name().to_string(),
-            description: t.description().to_string(),
-            input_schema: t.input_schema(),
-        })
-        .collect();
-
-    loop {
-        let response = client
-            .send_message(messages.clone(), Some(api_tools.clone()))
-            .await?;
-
-        let mut tool_uses = Vec::new();
-        let mut text_response = String::new();
-
-        for block in &response.content {
-            match block.block_type.as_str() {
-                "text" => {
-                    if let Some(text) = &block.text {
-                        text_response.push_str(text);
-                    }
-                }
-                "tool_use" => {
-                    tool_uses.push(block.clone());
-                }
-                _ => {}
-            }
-        }
-
-        if tool_uses.is_empty() {
-            return Ok(text_response);
-        }
-
-        // Add assistant message with tool calls
-        messages.push(Message {
-            role: "assistant".to_string(),
-            content: MessageContent::Blocks(response.content),
-        });
-
-        // Execute tools and collect results
-        let mut tool_results = Vec::new();
-        for tool_use in tool_uses {
-            let tool_name = tool_use.name.as_deref().unwrap_or("");
-            let tool_id = tool_use.id.as_deref().unwrap_or("");
-            let input = tool_use.input.clone().unwrap_or(json!({}));
-
-            println!("⚙️  Running tool: {} ...", tool_name);
-
-            let result = if let Some(tool) = tools.iter().find(|t| t.name() == tool_name) {
-                tool.execute(input).await.unwrap_or_else(|e| e.to_string())
-            } else {
-                format!("Unknown tool: {}", tool_name)
-            };
-
-            tool_results.push(ContentBlock {
-                block_type: "tool_result".to_string(),
-                text: Some(result),
-                id: Some(tool_id.to_string()),
-                name: None,
-                input: None,
-            });
-        }
-
-        messages.push(Message {
-            role: "user".to_string(),
-            content: MessageContent::Blocks(tool_results),
-        });
-    }
 }

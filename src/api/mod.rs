@@ -1,23 +1,13 @@
 use anyhow::Result;
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::process::Command;
 
-const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
-
+/// Claude Code CLI를 백엔드로 사용하는 클라이언트
+/// Max 플랜 구독으로 API 키 없이 사용 가능!
 #[derive(Clone)]
-pub struct AnthropicClient {
-    client: Client,
-    api_key: String,
-    model: String,
-}
-
-#[derive(Serialize)]
-struct MessageRequest {
-    model: String,
-    max_tokens: u32,
-    messages: Vec<Message>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<Tool>>,
+pub struct ClaudeClient {
+    cli_path: String,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -54,45 +44,79 @@ pub struct Tool {
     pub input_schema: serde_json::Value,
 }
 
-#[derive(Deserialize)]
 pub struct MessageResponse {
     pub content: Vec<ContentBlock>,
     pub stop_reason: Option<String>,
 }
 
-impl AnthropicClient {
-    pub fn new(api_key: String) -> Self {
+impl ClaudeClient {
+    pub fn new() -> Self {
         Self {
-            client: Client::new(),
-            api_key,
-            model: "claude-sonnet-4-20250514".to_string(),
+            cli_path: std::env::var("CLAUDE_CLI_PATH")
+                .unwrap_or_else(|_| "claude".to_string()),
         }
     }
 
+    /// Claude Code CLI를 호출하여 응답 받기
     pub async fn send_message(
         &self,
         messages: Vec<Message>,
-        tools: Option<Vec<Tool>>,
+        _tools: Option<Vec<Tool>>,
     ) -> Result<MessageResponse> {
-        let request = MessageRequest {
-            model: self.model.clone(),
-            max_tokens: 4096,
-            messages,
-            tools,
-        };
+        // 마지막 사용자 메시지 추출
+        let last_user_msg = messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .and_then(|m| match &m.content {
+                MessageContent::Text(t) => Some(t.clone()),
+                MessageContent::Blocks(blocks) => blocks
+                    .iter()
+                    .find(|b| b.block_type == "text")
+                    .and_then(|b| b.text.clone()),
+            })
+            .unwrap_or_default();
 
-        let response = self
-            .client
-            .post(ANTHROPIC_API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await?
-            .json::<MessageResponse>()
-            .await?;
+        // Claude Code CLI 호출 (--print: 출력만, --dangerously-skip-permissions: 도구 자동 승인)
+        let output = Command::new(&self.cli_path)
+            .args([
+                "--print",
+                "--dangerously-skip-permissions",
+                &last_user_msg,
+            ])
+            .output()?;
 
-        Ok(response)
+        let response_text = String::from_utf8_lossy(&output.stdout).to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        
+        if !output.status.success() && response_text.is_empty() {
+            return Ok(MessageResponse {
+                content: vec![ContentBlock {
+                    block_type: "text".to_string(),
+                    text: Some(format!("Error: {}", stderr)),
+                    id: None,
+                    name: None,
+                    input: None,
+                }],
+                stop_reason: Some("error".to_string()),
+            });
+        }
+
+        Ok(MessageResponse {
+            content: vec![ContentBlock {
+                block_type: "text".to_string(),
+                text: Some(response_text),
+                id: None,
+                name: None,
+                input: None,
+            }],
+            stop_reason: Some("end_turn".to_string()),
+        })
+    }
+}
+
+impl Default for ClaudeClient {
+    fn default() -> Self {
+        Self::new()
     }
 }
